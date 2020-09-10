@@ -10,6 +10,7 @@ setuptools.setup(
     install_requires=[
         'odoo12-addon-product_cost_price_avco_sync',
         'odoo12-addon-product_supplierinfo_for_customer_picking',
+        'odoo12-addon-product_supplierinfo_picking',
         'odoo12-addon-purchase_stock_picking_restrict_cancel',
         'odoo12-addon-sale_order_global_stock_route',
         'odoo12-addon-stock_change_price_at_date',
@@ -26,6 +27,7 @@ setuptools.setup(
         'odoo12-addon-stock_picking_customer_ref',
         'odoo12-addon-stock_picking_filter_lot',
         'odoo12-addon-stock_picking_invoice_link',
+        'odoo12-addon-stock_picking_late_activity',
         'odoo12-addon-stock_picking_line_sequence',
         'odoo12-addon-stock_picking_mass_action',
         'odoo12-addon-stock_picking_operation_quick_change',
