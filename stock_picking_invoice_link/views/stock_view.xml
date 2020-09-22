@@ -18,6 +18,9 @@
                 >
                 </button>
             </div>
+            <field name="origin" position="after">
+                <field name="invoice_ids" widget="many2many_tags"/>
+            </field>
         </field>
     </record>
     <!-- stock.move -->
