@@ -13,6 +13,11 @@ class SaleOrder(models.Model):
                 SaleOrder, sale_order.with_context(cancel_sale_id=sale_order.id)
             ).action_cancel()
 
+    def action_draft(self):
+        res = super().action_draft()
+        self.procurement_group_id = False
+        return res
+
     def get_name_for_delivery_line(self):
         """Get the name for the sale order displayed on the delivery note"""
         self.ensure_one()
@@ -27,5 +32,7 @@ class SaleOrderLine(models.Model):
 
     def _prepare_procurement_group_vals(self):
         vals = super()._prepare_procurement_group_vals()
+        if not vals.get("sale_ids") and vals.get("sale_id"):
+            vals["sale_ids"] = [(6, 0, [vals["sale_id"]])]
         vals["carrier_id"] = self.order_id.carrier_id.id
         return vals

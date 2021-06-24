@@ -20,18 +20,19 @@ class SaleOrderLine(models.Model):
         if not mto_route:
             return
         for line in self:
-            delivery_move = line.move_ids.filtered(
+            delivery_moves = line.move_ids.filtered(
                 lambda m: m.picking_id.picking_type_code == "outgoing"
                 and m.state not in ("done", "cancel")
             )
-            if (
-                not delivery_move.is_from_mto_route
-                or mto_route not in line.product_id.route_ids
-            ):
-                continue
-            orderpoint = line._get_mto_orderpoint()
-            if orderpoint.procure_recommended_qty:
-                orderpoints_to_procure_ids.append(orderpoint.id)
+            for delivery_move in delivery_moves:
+                if (
+                    not delivery_move.is_from_mto_route
+                    or mto_route not in line.product_id.route_ids
+                ):
+                    continue
+                orderpoint = line._get_mto_orderpoint(delivery_move.product_id)
+                if orderpoint.procure_recommended_qty:
+                    orderpoints_to_procure_ids.append(orderpoint.id)
         wiz = (
             self.env["make.procurement.orderpoint"]
             .with_context(
@@ -44,7 +45,7 @@ class SaleOrderLine(models.Model):
         )
         wiz.make_procurement()
 
-    def _get_mto_orderpoint(self):
+    def _get_mto_orderpoint(self, product_id):
         self.ensure_one()
         warehouse = self.warehouse_id or self.order_id.warehouse_id
         orderpoint = (
@@ -52,7 +53,7 @@ class SaleOrderLine(models.Model):
             .with_context(active_test=False)
             .search(
                 [
-                    ("product_id", "=", self.product_id.id),
+                    ("product_id", "=", product_id.id),
                     (
                         "location_id",
                         "=",
@@ -67,13 +68,19 @@ class SaleOrderLine(models.Model):
                 {"active": True, "product_min_qty": 0.0, "product_max_qty": 0.0}
             )
         elif not orderpoint:
-            orderpoint = self.env["stock.warehouse.orderpoint"].create(
-                {
-                    "product_id": self.product_id.id,
-                    "warehouse_id": warehouse.id,
-                    "location_id": warehouse._get_locations_for_mto_orderpoints().id,
-                    "product_min_qty": 0.0,
-                    "product_max_qty": 0.0,
-                }
+            orderpoint = (
+                self.env["stock.warehouse.orderpoint"]
+                .sudo()
+                .create(
+                    {
+                        "product_id": self.product_id.id,
+                        "warehouse_id": warehouse.id,
+                        "location_id": (
+                            warehouse._get_locations_for_mto_orderpoints().id
+                        ),
+                        "product_min_qty": 0.0,
+                        "product_max_qty": 0.0,
+                    }
+                )
             )
         return orderpoint

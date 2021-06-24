@@ -1,61 +1,11 @@
-from odoo.tests import tagged
+# Copyright 2020 Camptocamp (https://www.camptocamp.com)
+# Copyright 2020 Jacques-Etienne Baudoux (BCIM) <je@bcim.be>
+# License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl.html).
 
-from odoo.addons.sale.tests.test_sale_common import TestSale
+from .common import TestGroupByBase
 
 
-@tagged("post_install", "-at_install")
-class TestSaleStock(TestSale):
-    def setUp(self):
-        super().setUp()
-        self.carrier1 = self.env["delivery.carrier"].create(
-            {
-                "name": "My Test Carrier",
-                "product_id": self.env.ref("delivery.product_product_delivery").id,
-            }
-        )
-        self.carrier2 = self.env["delivery.carrier"].create(
-            {
-                "name": "My Other Test Carrier",
-                "product_id": self.env.ref("delivery.product_product_delivery").id,
-            }
-        )
-        self.env.ref("stock.warehouse0").group_shippings = True
-
-    def _get_new_sale_order(self, amount=10.0, partner=None, carrier=None):
-        """ Creates and returns a sale order with one default order line.
-
-        :param float amount: quantity of product for the order line (10 by default)
-        """
-        if partner is None:
-            partner = self.env.ref("base.res_partner_1")
-        if carrier is None:
-            carrier_id = False
-        else:
-            carrier_id = carrier.id
-        product = self.env.ref("product.product_delivery_01")
-        sale_order_vals = {
-            "partner_id": partner.id,
-            "partner_invoice_id": partner.id,
-            "partner_shipping_id": partner.id,
-            "carrier_id": carrier_id,
-            "order_line": [
-                (
-                    0,
-                    0,
-                    {
-                        "name": product.name,
-                        "product_id": product.id,
-                        "product_uom_qty": amount,
-                        "product_uom": product.uom_id.id,
-                        "price_unit": product.list_price,
-                    },
-                )
-            ],
-            "pricelist_id": self.env.ref("product.list0").id,
-        }
-        sale_order = self.env["sale.order"].create(sale_order_vals)
-        return sale_order
-
+class TestGroupBy(TestGroupByBase):
     def test_sale_stock_merge_same_partner_no_carrier(self):
         """2 sale orders for the same partner, without carrier
 
@@ -271,7 +221,8 @@ class TestSaleStock(TestSale):
         self.assertEqual(len(so1.picking_ids), 2)
         self.assertEqual(len(so2.picking_ids), 2)
         # ship & pick should be shared between so1 and so2
-        transfers = so1.picking_ids & so2.picking_ids
+        self.assertEqual(so1.picking_ids, so2.picking_ids)
+        transfers = so1.picking_ids
         self.assertEqual(len(transfers), 2)
         ships = transfers.filtered(lambda o: o.picking_type_id == warehouse.out_type_id)
         picks = transfers.filtered(
@@ -350,6 +301,48 @@ class TestSaleStock(TestSale):
         pick2 = so2.picking_ids - ships
         self.assertEqual(pick2.state, "cancel")
 
+    def test_delivery_multi_step_group_pick_cancel_so1(self):
+        """the warehouse uses pick + ship (with grouping enabled on pick)
+
+        -> shippings are grouped, as well as pickings"""
+        warehouse = self.env.ref("stock.warehouse0")
+        warehouse.delivery_steps = "pick_ship"
+        warehouse.pick_type_id.group_pickings = True
+        so1 = self._get_new_sale_order(carrier=self.carrier1)
+        so1.action_confirm()
+        so2 = self._get_new_sale_order(amount=11, carrier=self.carrier1)
+        so2.action_confirm()
+        so1.action_cancel()
+        # ship & pick should be shared between so1 and so2
+        transfers = so1.picking_ids
+        ship = transfers.filtered(lambda o: o.picking_type_id == warehouse.out_type_id)
+        pick = transfers.filtered(lambda o: o.picking_type_id == warehouse.pick_type_id)
+        self.assertEqual(len(ship), 1)
+        self.assertEqual(len(pick), 1)
+        self.assertEqual(ship.state, "waiting")
+        self.assertEqual(pick.state, "confirmed")
+
+    def test_delivery_multi_step_group_pick_cancel_so2(self):
+        """the warehouse uses pick + ship (with grouping enabled on pick)
+
+        -> shippings are grouped, as well as pickings"""
+        warehouse = self.env.ref("stock.warehouse0")
+        warehouse.delivery_steps = "pick_ship"
+        warehouse.pick_type_id.group_pickings = True
+        so1 = self._get_new_sale_order(carrier=self.carrier1)
+        so1.action_confirm()
+        so2 = self._get_new_sale_order(amount=11, carrier=self.carrier1)
+        so2.action_confirm()
+        so2.action_cancel()
+        # ship & pick should be shared between so1 and so2
+        transfers = so1.picking_ids
+        ship = transfers.filtered(lambda o: o.picking_type_id == warehouse.out_type_id)
+        pick = transfers.filtered(lambda o: o.picking_type_id == warehouse.pick_type_id)
+        self.assertEqual(len(ship), 1)
+        self.assertEqual(len(pick), 1)
+        self.assertEqual(ship.state, "waiting")
+        self.assertEqual(pick.state, "confirmed")
+
     def test_delivery_multi_step_cancel_so1_create_so3(self):
         """the warehouse uses pick + ship. Cancel SO1, create SO3
 
@@ -381,3 +374,82 @@ class TestSaleStock(TestSale):
         self.assertTrue(so1.picking_ids)
         self.assertTrue(so2.picking_ids)
         self.assertFalse(so1.picking_ids & so2.picking_ids)
+
+    def test_sale_stock_merge_procurement_group(self):
+        """sale orders are merged, procurement groups are merged
+
+        Ensure that the procurement group is linked with both SO
+        and we find the stock.picking records from the SO.
+        Ensure that printed transfers keep their procurement group.
+        """
+        so1 = self._get_new_sale_order(carrier=self.carrier1)
+        so1.name = "SO1"
+        so2 = self._get_new_sale_order(amount=11, carrier=self.carrier1)
+        so2.name = "SO2"
+        so1.action_confirm()
+        so2.action_confirm()
+        self.assertEqual(so1.picking_ids, so2.picking_ids)
+        picking = so1.picking_ids
+        # the group is the same on the move lines and picking
+        self.assertEqual(picking.group_id, picking.move_lines.group_id)
+        group = picking.group_id
+        # the group is related to both sales orders
+        self.assertEqual(group.sale_ids, so1 | so2)
+        self.assertEqual(group.name, "{}, {}".format(so1.name, so2.name))
+
+        self._update_qty_in_location(
+            picking.location_id,
+            so1.order_line.product_id,
+            so1.order_line.product_uom_qty,
+        )
+        picking.action_assign()
+
+        # process move of so1, we'll expect groups for new backorders and new
+        # transfers merged in the backorder to "forget" about so1
+        move1 = picking.move_lines.filtered(
+            lambda line: line.sale_line_id.order_id == so1
+        )
+        line1 = move1.move_line_ids
+        line1.qty_done = line1.product_uom_qty
+        picking.action_done()
+
+        backorder = picking.backorder_ids
+        # as we no longer have anything of so1 in the backorder,
+        # now it's only related to so2
+        self.assertEqual(backorder.group_id.sale_ids, so2)
+        self.assertEqual(backorder.group_id.name, so2.name)
+
+        so3 = self._get_new_sale_order(carrier=self.carrier1)
+        so3.name = "SO3"
+        so3.action_confirm()
+
+        # so3 moves are merged in the backorder used for so2,
+        # a new group is used to hold so2 and so3
+        self.assertEqual(backorder.group_id.sale_ids, so2 | so3)
+        self.assertEqual(backorder.group_id.name, "{}, {}".format(so2.name, so3.name))
+
+        self.assertEqual(so1.picking_ids, picking)
+        self.assertEqual(so2.picking_ids, picking | backorder)
+        self.assertEqual(so3.picking_ids, backorder)
+
+    def test_create_backorder(self):
+        """Ensure there is no regression when group pickings is disabled when
+        we confirm a partial qty on a picking to create a backorder.
+        """
+        so = self._get_new_sale_order(amount=10, carrier=self.carrier1)
+        so.name = "SO TEST"
+        so.action_confirm()
+        picking = so.picking_ids
+        picking.picking_type_id.group_pickings = False
+        self._update_qty_in_location(
+            picking.location_id,
+            so.order_line[0].product_id,
+            so.order_line[0].product_uom_qty,
+        )
+        picking.action_assign()
+        line = picking.move_lines[0].move_line_ids
+        line.qty_done = line.product_uom_qty / 2
+        picking.action_done()
+        self.assertEqual(picking.state, "done")
+        self.assertTrue(picking.backorder_ids)
+        self.assertNotEqual(picking, picking.backorder_ids)
